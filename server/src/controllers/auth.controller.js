@@ -131,8 +131,79 @@ async function userLogoutController(req, res) {
     });
 }
 
+async function userForgotPasswordController(req, res) {
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({ message: "Email is required" });
+    }
+
+    try {
+        const user = await userModel.findOne({ email });
+
+        if (!user) {
+            return res.status(200).json({
+                message: "If an account with that email exists, a password reset link has been sent."
+            });
+        }
+
+        const crypto = require("crypto");
+        const token = crypto.randomBytes(20).toString("hex");
+
+        user.resetPasswordToken = token;
+        user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+
+        await user.save();
+
+        await emailService.sendPasswordResetEmail(user.email, user.name, token);
+
+        return res.status(200).json({
+            message: "If an account with that email exists, a password reset link has been sent."
+        });
+    } catch (error) {
+        return res.status(500).json({ message: error.message });
+    }
+}
+
+async function userResetPasswordController(req, res) {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+        return res.status(400).json({ message: "Token and new password are required" });
+    }
+
+    if (newPassword.length < 6) {
+        return res.status(400).json({ message: "Password should contain more than 6 characters" });
+    }
+
+    try {
+        const user = await userModel.findOne({
+            resetPasswordToken: token,
+            resetPasswordExpires: { $gt: Date.now() }
+        }).select("+resetPasswordToken +resetPasswordExpires");
+
+        if (!user) {
+            return res.status(400).json({ message: "Password reset token is invalid or has expired." });
+        }
+
+        user.password = newPassword;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+
+        await user.save();
+
+        return res.status(200).json({
+            message: "Password has been reset successfully."
+        });
+    } catch (error) {
+        return res.status(500).json({ message: error.message });
+    }
+}
+
 module.exports = {
     userRegisterController,
     userLoginController,
-    userLogoutController
+    userLogoutController,
+    userForgotPasswordController,
+    userResetPasswordController
 };

@@ -11,6 +11,12 @@ const transactionRoutes = Router();
 
 transactionRoutes.post("/", authMiddleware.authMiddleware, transactionController.createTransaction)
 
+/**
+ * - GET /api/transactions/
+ * - Get all transactions involving the logged-in user
+ */
+transactionRoutes.get("/", authMiddleware.authMiddleware, transactionController.getUserTransactions)
+
 
 /**
  * - POST /api/transactions/system/initial-funds

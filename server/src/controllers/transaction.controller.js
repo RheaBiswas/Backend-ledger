@@ -39,7 +39,7 @@ async function createTransaction(req, res) {
 
     const toUserAccount = await accountModel.findOne({
         _id: toAccount,
-    })
+    }).populate("user")
 
     if (!fromUserAccount || !toUserAccount) {
         return res.status(400).json({
@@ -166,7 +166,27 @@ async function createTransaction(req, res) {
     /**
      * 10. Send email notification
      */
-    await emailService.sendTransactionEmail(req.user.email, req.user.name, amount, toAccount)
+    // Send Debit notification to sender
+    await emailService.sendDebitNotification(
+        req.user.email,
+        req.user.name,
+        amount,
+        fromAccount,
+        toAccount,
+        transaction._id
+    );
+
+    // Send Credit notification to receiver
+    if (toUserAccount.user && toUserAccount.user.email) {
+        await emailService.sendCreditNotification(
+            toUserAccount.user.email,
+            toUserAccount.user.name,
+            amount,
+            fromAccount,
+            toAccount,
+            transaction._id
+        );
+    }
 
     return res.status(201).json({
         message: "Transaction completed successfully",
@@ -244,7 +264,39 @@ async function createInitialFundsTransaction(req, res) {
 
 }
 
+async function getUserTransactions(req, res) {
+    try {
+        const userAccounts = await accountModel.find({ user: req.user._id });
+        const accountIds = userAccounts.map(acc => acc._id);
+
+        const transactions = await transactionModel.find({
+            $or: [
+                { fromAccount: { $in: accountIds } },
+                { toAccount: { $in: accountIds } }
+            ]
+        })
+        .populate({
+            path: 'fromAccount',
+            populate: { path: 'user', select: 'name email' }
+        })
+        .populate({
+            path: 'toAccount',
+            populate: { path: 'user', select: 'name email' }
+        })
+        .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            transactions
+        });
+    } catch (error) {
+        return res.status(500).json({
+            message: error.message
+        });
+    }
+}
+
 module.exports = {
     createTransaction,
-    createInitialFundsTransaction
+    createInitialFundsTransaction,
+    getUserTransactions
 }
