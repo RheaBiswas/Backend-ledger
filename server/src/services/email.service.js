@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
+let transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: process.env.EMAIL_PASS ? {
         user: process.env.EMAIL_USER,
@@ -17,7 +17,23 @@ const transporter = nodemailer.createTransport({
 // Verify the connection configuration
 transporter.verify((error, success) => {
     if (error) {
-        console.error('Error connecting to email server:', error);
+        console.log('Gmail SMTP connection failed. Creating Ethereal Test Account fallback...');
+        nodemailer.createTestAccount((testAccountErr, testAccount) => {
+            if (testAccountErr) {
+                console.error('Failed to create Ethereal test account:', testAccountErr);
+                return;
+            }
+            transporter = nodemailer.createTransport({
+                host: testAccount.smtp.host,
+                port: testAccount.smtp.port,
+                secure: testAccount.smtp.secure,
+                auth: {
+                    user: testAccount.user,
+                    pass: testAccount.pass
+                }
+            });
+            console.log('Ethereal Test email server ready. SMTP User:', testAccount.user);
+        });
     } else {
         console.log('Email server is ready to send messages');
     }
@@ -27,8 +43,12 @@ transporter.verify((error, success) => {
 // Function to send email
 const sendEmail = async (to, subject, text, html) => {
     try {
+        const fromAddress = process.env.EMAIL_USER && !transporter.options?.host?.includes("ethereal")
+            ? process.env.EMAIL_USER
+            : (transporter.options?.auth?.user || "test@ethereal.email");
+
         const info = await transporter.sendMail({
-            from: `"Backend Ledger" <${process.env.EMAIL_USER}>`, // sender address
+            from: `"Backend Ledger" <${fromAddress}>`, // sender address
             to, // list of receivers
             subject, // Subject line
             text, // plain text body
@@ -36,7 +56,10 @@ const sendEmail = async (to, subject, text, html) => {
         });
 
         console.log('Message sent: %s', info.messageId);
-        console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
+        const previewUrl = nodemailer.getTestMessageUrl(info);
+        if (previewUrl) {
+            console.log('Preview URL: %s', previewUrl);
+        }
     } catch (error) {
         console.error('Error sending email:', error);
     }
@@ -68,7 +91,7 @@ async function sendTransactionFailureEmail(userEmail, name, amount, toAccount) {
 }
 
 async function sendPasswordResetEmail(userEmail, name, token) {
-    const resetUrl = `http://localhost:5173/reset-password?token=${token}`;
+    const resetUrl = `http://localhost:5173/?token=${token}`;
     const subject = 'Password Reset Request - LedgerBook';
     const text = `Hello ${name},\n\nYou requested a password reset. Please click the link below to reset your password:\n\n${resetUrl}\n\nThis link is valid for 1 hour. If you did not request this, please ignore this email.\n\nBest regards,\nThe Backend Ledger Team`;
     const html = `<p>Hello ${name},</p>

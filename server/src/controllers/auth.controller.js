@@ -48,10 +48,10 @@ async function userRegisterController(req, res) {
         token
     });
 
-    await emailService.sendRegistrationEmail(
+    emailService.sendRegistrationEmail(
         user.email,
         user.name
-    );
+    ).catch(err => console.error("Error sending registration email:", err));
 }
 
 /**

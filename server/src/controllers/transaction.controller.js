@@ -56,6 +56,16 @@ async function createTransaction(req, res) {
     })
 
     if (isTransactionAlreadyExists) {
+        if (
+            isTransactionAlreadyExists.fromAccount.toString() !== fromAccount ||
+            isTransactionAlreadyExists.toAccount.toString() !== toAccount ||
+            isTransactionAlreadyExists.amount !== Number(amount)
+        ) {
+            return res.status(400).json({
+                message: "Idempotency key conflict: This key was previously used with different parameters"
+            })
+        }
+
         if (isTransactionAlreadyExists.status === "COMPLETED") {
             return res.status(200).json({
                 message: "Transaction already processed",
@@ -105,6 +115,7 @@ async function createTransaction(req, res) {
     }
 
     let session;
+    let transaction;
     try {
 
 
@@ -140,10 +151,10 @@ async function createTransaction(req, res) {
             type: "CREDIT"
         } ], { session })
 
-        await transactionModel.findOneAndUpdate(
+        transaction = await transactionModel.findOneAndUpdate(
             { _id: transaction._id },
             { status: "COMPLETED" },
-            { session }
+            { session, new: true }
         )
 
 
@@ -160,32 +171,30 @@ async function createTransaction(req, res) {
     }finally{
         if (session) {
             await session.endSession();
+        }
     }
 
-    }
     /**
-     * 10. Send email notification
+     * 10. Send email notification (non-blocking background calls)
      */
-    // Send Debit notification to sender
-    await emailService.sendDebitNotification(
+    emailService.sendDebitNotification(
         req.user.email,
         req.user.name,
         amount,
         fromAccount,
         toAccount,
         transaction._id
-    );
+    ).catch(err => console.error("Error sending debit email notification:", err));
 
-    // Send Credit notification to receiver
     if (toUserAccount.user && toUserAccount.user.email) {
-        await emailService.sendCreditNotification(
+        emailService.sendCreditNotification(
             toUserAccount.user.email,
             toUserAccount.user.name,
             amount,
             fromAccount,
             toAccount,
             transaction._id
-        );
+        ).catch(err => console.error("Error sending credit email notification:", err));
     }
 
     return res.status(201).json({
@@ -224,44 +233,106 @@ async function createInitialFundsTransaction(req, res) {
         })
     }
 
+    // Verify target and source accounts are active
+    if (toUserAccount.status !== "ACTIVE") {
+        return res.status(400).json({
+            message: "toAccount must be ACTIVE to process transaction"
+        })
+    }
 
-    const session = await mongoose.startSession()
-    session.startTransaction()
+    if (fromUserAccount.status !== "ACTIVE") {
+        return res.status(400).json({
+            message: "System user account must be ACTIVE to process transaction"
+        })
+    }
 
-    const transaction = new transactionModel({
-        fromAccount: fromUserAccount._id,
-        toAccount,
-        amount,
-        idempotencyKey,
-        status: "PENDING"
+    // Validate idempotency key
+    const isTransactionAlreadyExists = await transactionModel.findOne({
+        idempotencyKey: idempotencyKey
     })
 
-    const debitLedgerEntry = await ledgerModel.create([ {
-        account: fromUserAccount._id,
-        amount: amount,
-        transaction: transaction._id,
-        type: "DEBIT"
-    } ], { session })
+    if (isTransactionAlreadyExists) {
+        if (
+            isTransactionAlreadyExists.toAccount.toString() !== toAccount ||
+            isTransactionAlreadyExists.amount !== Number(amount)
+        ) {
+            return res.status(400).json({
+                message: "Idempotency key conflict: This key was previously used with different parameters"
+            })
+        }
 
-    const creditLedgerEntry = await ledgerModel.create([ {
-        account: toAccount,
-        amount: amount,
-        transaction: transaction._id,
-        type: "CREDIT"
-    } ], { session })
+        if (isTransactionAlreadyExists.status === "COMPLETED") {
+            return res.status(200).json({
+                message: "Initial funds transaction already processed",
+                transaction: isTransactionAlreadyExists
+            })
+        }
 
-    transaction.status = "COMPLETED"
-    await transaction.save({ session })
+        if (isTransactionAlreadyExists.status === "PENDING") {
+            return res.status(200).json({
+                message: "Initial funds transaction is still processing",
+            })
+        }
 
-    await session.commitTransaction()
-    session.endSession()
+        if (isTransactionAlreadyExists.status === "FAILED") {
+            return res.status(500).json({
+                message: "Initial funds transaction processing failed, please retry"
+            })
+        }
+    }
+
+    let session;
+    let transaction;
+    try {
+        session = await mongoose.startSession()
+        session.startTransaction()
+
+        transaction = (await transactionModel.create([ {
+            fromAccount: fromUserAccount._id,
+            toAccount,
+            amount,
+            idempotencyKey,
+            status: "PENDING"
+        } ], { session }))[ 0 ]
+
+        await ledgerModel.create([ {
+            account: fromUserAccount._id,
+            amount: amount,
+            transaction: transaction._id,
+            type: "DEBIT"
+        } ], { session })
+
+        await ledgerModel.create([ {
+            account: toAccount,
+            amount: amount,
+            transaction: transaction._id,
+            type: "CREDIT"
+        } ], { session })
+
+        transaction = await transactionModel.findOneAndUpdate(
+            { _id: transaction._id },
+            { status: "COMPLETED" },
+            { session, new: true }
+        )
+
+        await session.commitTransaction()
+    } catch (error) {
+        if (session) {
+            await session.abortTransaction()
+        }
+        return res.status(500).json({
+            message: error.message,
+        })
+    } finally {
+        if (session) {
+            await session.endSession()
+        }
+    }
 
     return res.status(201).json({
         message: "Initial funds transaction completed successfully",
         transaction: transaction
     })
-
-
 }
 
 async function getUserTransactions(req, res) {

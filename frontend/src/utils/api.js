@@ -1,4 +1,4 @@
-const API_URL = "https://backend-ledger-p2ir.onrender.com/";
+const API_URL = "http://localhost:3000/api";
 
 const getHeaders = () => {
     const token = localStorage.getItem("token");
