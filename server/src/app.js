@@ -6,8 +6,30 @@ const cors = require("cors")
 
 const app = express()
 
+const allowedOrigins = [
+    "http://localhost:5173",
+    "http://localhost:3000"
+];
+
+if (process.env.CLIENT_URL) {
+    allowedOrigins.push(process.env.CLIENT_URL);
+}
+
 app.use(cors({
-    origin: ["http://localhost:5173", "http://localhost:3000"],
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl, or server-to-server)
+        if (!origin) return callback(null, true);
+        
+        const isAllowed = allowedOrigins.includes(origin) || 
+                          origin.endsWith(".vercel.app") || 
+                          /^http:\/\/localhost:\d+$/.test(origin);
+                          
+        if (isAllowed) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
 }))
 app.use(express.json())
