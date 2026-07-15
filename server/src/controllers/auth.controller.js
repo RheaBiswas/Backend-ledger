@@ -155,7 +155,8 @@ async function userForgotPasswordController(req, res) {
 
         await user.save();
 
-        await emailService.sendPasswordResetEmail(user.email, user.name, token);
+        emailService.sendPasswordResetEmail(user.email, user.name, token)
+            .catch(error => console.error("Error sending reset password email:", error));
 
         return res.status(200).json({
             message: "If an account with that email exists, a password reset link has been sent."
